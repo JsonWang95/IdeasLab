@@ -5,14 +5,44 @@ import torch
 from torch.utils.data import Dataset
 import numpy as np
 from torchvision import transforms
+import random
+import torchvision.transforms.functional as F
+import torchvision.transforms.functional as TF
+
+class JointRandomHorizontalFlip(object):
+    def __init__(self, p=0.5):
+        self.p = p
+
+    def __call__(self, image, heatmap):
+        if random.random() < self.p:
+            return F.hflip(image), F.hflip(heatmap)
+        return image, heatmap
+
+class JointRandomRotation(object):
+    def __init__(self, degrees):
+        self.degrees = degrees
+
+    def __call__(self, image, heatmap):
+        angle = random.uniform(-self.degrees, self.degrees)
+        return F.rotate(image, angle), F.rotate(heatmap, angle)
+
+class JointCompose:
+    def __init__(self, transforms):
+        self.transforms = transforms
+
+    def __call__(self, image, heatmap):
+        for t in self.transforms:
+            image, heatmap = t(image, heatmap)
+        return image, heatmap
 
 class GolfBallDataset(Dataset):
-    def __init__(self, root_dir, purpose, split='train', image_size=256, group_by_video=False, transform=None):
+    def __init__(self, root_dir, purpose, split='train', image_size=256, group_by_video=False, transform=None, joint_transform=None):
         self.root_dir = root_dir
         self.purpose = purpose
         self.image_size = image_size
         self.group_by_video = group_by_video
         self.transform = transform
+        self.joint_transform = joint_transform
         
         if purpose == 'detection':
             self.split = split
@@ -36,6 +66,8 @@ class GolfBallDataset(Dataset):
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ])
+
+        self.resize_transform = transforms.Resize((image_size, image_size))
 
     def _load_image_list(self):
         if self.purpose == 'detection':
@@ -79,16 +111,63 @@ class GolfBallDataset(Dataset):
         return len(self.image_list)
 
     def __getitem__(self, idx):
-        if self.group_by_video and self.purpose == 'tracking':
-            video_name = list(self.video_frames.keys())[idx]
-            frames = self.video_frames[video_name]
-            return self._process_video(frames)
+        img_name = self.image_list[idx]
+        
+        if self.purpose == 'tracking':
+            parts = img_name.split('_')
+            video_name = parts[0] + '_' + parts[1]
+            frame_number = parts[-1]
+            
+            if video_name.startswith('Put'):
+                folder_name = video_name
+                file_name = f"{video_name[:-2]}{parts[1]}_{frame_number}.jpg"
+                ann_file_name = f"{video_name[:-2]}{parts[1]}_{frame_number}.xml"
+            elif video_name.startswith('Golf'):
+                folder_name = video_name
+                file_name = f"{parts[1].zfill(2)}_{frame_number}.jpg"
+                ann_file_name = f"{parts[1].zfill(2)}_{frame_number}.xml"
+            else:
+                raise ValueError(f"Unknown video name format: {video_name}")
+            
+            img_path = os.path.join(self.image_dir, folder_name, file_name)
+            ann_path = os.path.join(self.annotation_dir, ann_file_name)
         else:
-            img_name = self.image_list[idx]
-            return self._process_single_frame(img_name)
+            file_name = f"{img_name}.jpg"
+            img_path = os.path.join(self.image_dir, file_name)
+            ann_path = os.path.join(self.annotation_dir, f"{img_name}.xml")
 
+        image = Image.open(img_path).convert('RGB')
+        bbox = self._parse_annotation(ann_path)
+
+        heatmap = self._generate_heatmap(image.size, bbox)
+        heatmap = Image.fromarray((heatmap * 255).astype(np.uint8))  # Convert to PIL Image
+
+        if self.joint_transform:
+            image, heatmap = self.joint_transform(image, heatmap)
+
+        # Apply the same random resized crop to both image and heatmap
+        i, j, h, w = transforms.RandomResizedCrop.get_params(
+            image, scale=(0.8, 1.0), ratio=(1.0, 1.0))
+        
+        # Check if the crop contains a significant part of the golf ball
+        heatmap_np = np.array(heatmap)
+        crop_heatmap = heatmap_np[j:j+h, i:i+w]
+        if crop_heatmap.max() > 0.5 * heatmap_np.max():  # Ensure the crop contains at least 50% of the max heatmap value
+            image = TF.resized_crop(image, i, j, h, w, (self.image_size, self.image_size))
+            heatmap = TF.resized_crop(heatmap, i, j, h, w, (self.image_size, self.image_size))
+        else:
+            # If the crop doesn't contain enough of the golf ball, just resize
+            image = TF.resize(image, (self.image_size, self.image_size))
+            heatmap = TF.resize(heatmap, (self.image_size, self.image_size))
+
+        if self.transform:
+            image = self.transform(image)
+        
+        heatmap = TF.to_tensor(heatmap)
+
+        return image, heatmap, file_name
+    
     def _process_single_frame(self, img_name):
-        #print(f"Processing image: {img_name}")
         if self.purpose == 'tracking':
             parts = img_name.split('_')
             video_name = parts[0] + '_' + parts[1]  # 'Put_1' or 'Golf_2'
@@ -110,10 +189,8 @@ class GolfBallDataset(Dataset):
         else:
             img_path = os.path.join(self.image_dir, f"{img_name}.jpg")
             ann_path = os.path.join(self.annotation_dir, f"{img_name}.xml")
-        
-        #print(f"Attempting to open image at: {img_path}")
-        #print(f"Attempting to open annotation at: {ann_path}")
-        
+
+
         if not os.path.exists(img_path):
             print(f"Image file not found: {img_path}")
             print(f"Directory contents: {os.listdir(os.path.dirname(img_path))}")

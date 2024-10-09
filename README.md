@@ -44,6 +44,7 @@ This will start the training process, save model checkpoints, and generate visua
 ## Data
 
 The project expects data to be organized in the following structure:
+
 data/
   detection/
     JPEGImages/

@@ -45,14 +45,14 @@ This will start the training process, save model checkpoints, and generate visua
 
 The project expects data to be organized in the following structure:
 data/
-├── detection/
-│ ├── JPEGImages/
-│ ├── Annotations/
-│ └── ImageSets/
-└── tracking/
-├── JPEGImages/
-├── Annotations/
-└── ImageSets/
+|-- detection/
+|   |-- JPEGImages/
+|   |-- Annotations/
+|   `-- ImageSets/
+`-- tracking/
+    |-- JPEGImages/
+    |-- Annotations/
+    `-- ImageSets/
 
 Ensure your data follows this structure before running the training script.
 

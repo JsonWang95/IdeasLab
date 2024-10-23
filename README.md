@@ -42,7 +42,7 @@ python src/test_train.py
 This will start the training process, save model checkpoints, and generate visualizations in the `training_results_TIMESTAMP` directory.
 
 ## Data
-
+>[!IMPORTANT]
 The project expects data to be organized in the following structure:
 
 ```
